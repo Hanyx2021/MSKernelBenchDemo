@@ -212,12 +212,9 @@
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            background: #cbd5e1;
-            margin-right: 4px;
-        }
-
-        .operator-item.file-available .file-indicator {
-            background: #22c55e;
+            background: #e2e8f0;
+            margin-right: 8px;
+            flex-shrink: 0;
         }
 
         .code-view {
@@ -347,9 +344,6 @@
             <ul class="operator-list" id="operatorList">
                 <!-- Operators will be dynamically generated here -->
             </ul>
-            <div style="margin-top: 2rem; padding: 0 1rem; color: #94a3b8; font-size: 0.75rem; border-top: 1px dashed #d1d9e6; padding-top: 1.5rem;">
-                Automatically loading .cu files from origin/ and optimized/ directories
-            </div>
         </div>
         
         <!-- Draggable resizer -->
@@ -500,7 +494,6 @@
                     li.className = 'operator-item';
                     li.setAttribute('data-op', op);
                     li.innerHTML = `
-                        <span class="file-indicator"></span>
                         <span>${op}</span>
                     `;
                     li.addEventListener('click', async () => {
@@ -525,21 +518,10 @@
                 });
             }
 
-            // Update file indicators (green dots)
+            // Update file indicators (green dots) - REMOVED
             function updateFileIndicators() {
-                const operatorItems = document.querySelectorAll('.operator-item');
-                operatorItems.forEach(item => {
-                    const op = item.getAttribute('data-op');
-                    const entry = fileMap.get(op);
-                    const hasOrigin = entry && entry.origin != null;
-                    const hasOpt = entry && entry.optimized != null;
-                    // Only show green dot if files are actually available
-                    if (hasOrigin || hasOpt) {
-                        item.classList.add('file-available');
-                    } else {
-                        item.classList.remove('file-available');
-                    }
-                });
+                // Function kept for compatibility but no longer needed
+                // All operators are assumed to be available in static mode
             }
 
             // Display code: load files on demand when operator is clicked
