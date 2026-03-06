@@ -1,0 +1,248 @@
+#include <algorithm>
+#include <cmath>
+#include <cuda.h>
+#include <cuda_bf16.h>
+#include <cuda_runtime.h>
+#include <float.h>
+#include <math.h>
+#include <optional>
+#include <random>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <tuple>
+#include <vector>
+
+
+// Simple function to check if two bf16 values are approximately equal
+bool bfloat16_equals(__nv_bfloat16 a, __nv_bfloat16 b, float tolerance) {
+    return fabs(__bfloat162float(a) - __bfloat162float(b)) < tolerance;
+}
+
+// ==== OPTIMIZED KERNEL START ====
+// Optimized kernel: 1-to-1 mapping of threads to elements, no strided loop
+__global__ void vector_add_bf16_kernel_optimized(const __nv_bfloat16* A,
+                                                 const __nv_bfloat16* B,
+                                                 __nv_bfloat16* C,
+                                                 int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < N) {
+        // Convert bfloat16 to float, add, then convert back
+        float a = __bfloat162float(A[idx]);
+        float b = __bfloat162float(B[idx]);
+        C[idx]   = __float2bfloat16(a + b);
+    }
+}
+
+// External C wrapper with optimized launch configuration
+extern "C" void vector_add_bf16_optimized(const __nv_bfloat16* A,
+                                            const __nv_bfloat16* B,
+                                            __nv_bfloat16* C,
+                                            int N) {
+    const int block_size = 1024;
+    int grid_size = (N + block_size - 1) / block_size;
+    dim3 block(block_size, 1, 1);
+    dim3 grid(grid_size, 1, 1);
+    
+    vector_add_bf16_kernel_optimized<<<grid, block>>>(A, B, C, N);
+    cudaDeviceSynchronize();
+}
+// ==== OPTIMIZED KERNEL END ====
+
+__global__ void vector_add_bf16_kernel(const __nv_bfloat16* A, const __nv_bfloat16* B, __nv_bfloat16* C, int N) {
+    for (int i = threadIdx.x; i < N; i += blockDim.x) {
+        C[i] = __float2bfloat16(__bfloat162float(A[i]) + __bfloat162float(B[i]));
+    }
+}
+
+extern "C" void vector_add_bf16_origin(const __nv_bfloat16* A, const __nv_bfloat16* B, __nv_bfloat16* C, int N) {
+    
+    dim3 block(1024, 1, 1);
+    dim3 grid(1, 1, 1);
+    
+    vector_add_bf16_kernel<<<grid, block>>>(A, B, C, N);
+    cudaDeviceSynchronize();
+}
+
+// Test case input data structure
+typedef struct {
+    int N;
+    __nv_bfloat16 *A;
+    __nv_bfloat16 *B;
+} TestCase;
+
+// Function to load test case from hardcoded values
+
+void load_test_case(std::vector<TestCase>& test_case_list) {
+    std::vector<int> N_list = {1 << 10, 1 << 12, 1 << 14, 1 << 16, 1 << 18};
+
+    for (int i = 0; i < N_list.size(); i++) {
+        TestCase test_case;
+        test_case.N = N_list[i];
+        
+        // Use fixed seed for reproducibility
+        std::random_device rd;
+        std::mt19937 rng(rd());  // Random seed for testing
+        std::uniform_real_distribution<float> input_dist(-1.0f, 1.0f);
+        
+        int input_item = test_case.N;
+        test_case.A = new __nv_bfloat16[input_item];
+        test_case.B = new __nv_bfloat16[input_item];
+        
+        for (int ii = 0; ii < input_item; ii++) {
+            test_case.A[ii] = __float2bfloat16(input_dist(rng));
+            test_case.B[ii] = __float2bfloat16(input_dist(rng));
+        }
+        test_case_list.push_back(test_case);
+    }
+}
+
+// Print test case data size
+void print_test_case_size(TestCase test_case) {
+    printf("Test case size: N: %d. Complexity: %d\n", test_case.N, test_case.N);
+}
+
+// Function to warm up GPU and stabilize frequency
+void stabilize_gpu() {
+    // Create a dummy kernel to warm up GPU
+    float *d_temp;
+    cudaMalloc(&d_temp, sizeof(float));
+    cudaFree(d_temp);
+    
+    // Small delay to let GPU stabilize
+    for (volatile int i = 0; i < 10000; i++); // Busy wait
+}
+
+// Function to measure kernel performance with multiple iterations
+template<typename KernelFunc>
+float measure_kernel_performance(KernelFunc kernel, int iterations) {
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    
+    // Warmup
+    for (int i = 0; i < 3; i++) {
+        kernel();
+    }
+    
+    // Measure multiple iterations
+    cudaEventRecord(start);
+    for (int i = 0; i < iterations; i++) {
+        kernel();
+    }
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    
+    float total_time;
+    cudaEventElapsedTime(&total_time, start, stop);
+    
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+    
+    return total_time ;  // Average time per iteration
+}
+
+// Function to check CUDA errors
+void checkCudaError(cudaError_t err, const char* msg) {
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA Error: %s: %s\n", msg, cudaGetErrorString(err));
+        exit(1);
+    }
+}
+
+int main() {
+    /* ================  Prepare data  ================ */
+    std::vector<TestCase> test_case_list;
+    load_test_case(test_case_list);
+
+    for (const auto& test_case : test_case_list) {
+        // Calculate sizes
+        const int input_item = test_case.N;
+        size_t input_size = input_item * sizeof(__nv_bfloat16);
+        size_t output_size = input_item * sizeof(__nv_bfloat16);
+
+        // Host memory inputs
+        __nv_bfloat16* h_A = (__nv_bfloat16*)malloc(input_size);
+        __nv_bfloat16* h_B = (__nv_bfloat16*)malloc(input_size);
+        __nv_bfloat16* h_C = (__nv_bfloat16*)malloc(output_size);
+        __nv_bfloat16* h_C_optimized = (__nv_bfloat16*)malloc(output_size);
+
+        if (!h_A || !h_B || !h_C || !h_C_optimized) {
+            printf("Failed to allocate host memory\n");
+            return 1;
+        }
+
+        // Copy data to host
+        memcpy(h_A, test_case.A, input_size);
+        memcpy(h_B, test_case.B, input_size);
+
+        // GPU memory allocation
+        __nv_bfloat16 *d_A, *d_B, *d_C, *d_C_optimized;
+
+        checkCudaError(cudaMalloc((void**)&d_A, input_size), "Allocating d_A");
+        checkCudaError(cudaMalloc((void**)&d_B, input_size), "Allocating d_B");
+        checkCudaError(cudaMalloc((void**)&d_C, output_size), "Allocating d_C");
+        checkCudaError(cudaMalloc((void**)&d_C_optimized, output_size), "Allocating d_C_optimized");
+
+        // Copy input data to GPU
+        checkCudaError(cudaMemcpy(d_A, h_A, input_size, cudaMemcpyHostToDevice), "Copying h_A to d_A");
+        checkCudaError(cudaMemcpy(d_B, h_B, input_size, cudaMemcpyHostToDevice), "Copying h_B to d_B");
+
+        // Stabilize GPU frequency
+        stabilize_gpu();
+        const char* profiling_env = std::getenv("PROFILING_MODE");
+        const int ITERATIONS = profiling_env ? 1 : 50;  // Reduced iterations for stability
+
+        /* ================  Define test kernels  ================ */
+
+        auto origin_kernel = [&]() {
+            vector_add_bf16_origin(d_A, d_B, d_C, test_case.N);
+            checkCudaError(cudaGetLastError(), "Origin kernel launch");
+        };
+        
+        auto optimized_kernel = [&]() {
+            vector_add_bf16_optimized(d_A, d_B, d_C_optimized, test_case.N);
+            checkCudaError(cudaGetLastError(), "Optimized kernel launch");
+        };
+
+        /* ================ Run test kernels  ================ */
+        float origin_time = measure_kernel_performance(origin_kernel, ITERATIONS);
+        
+        stabilize_gpu();
+        
+        float optimized_time = measure_kernel_performance(optimized_kernel, ITERATIONS);
+
+        // Copy results back for verification
+        checkCudaError(cudaMemcpy(h_C, d_C, output_size, cudaMemcpyDeviceToHost), "Copying d_C to h_C");
+        checkCudaError(cudaMemcpy(h_C_optimized, d_C_optimized, output_size, cudaMemcpyDeviceToHost), "Copying d_C_optimized to h_C_optimized");
+
+        /* ================  Verify results  ================ */
+        printf("===================\n");
+        print_test_case_size(test_case);
+
+        for (int i = 0; i < input_item; i++) {
+            if (!bfloat16_equals(h_C[i], h_C_optimized[i], 1e-2f)) {
+                printf("Output mismatch at index %d: original %.6f, optimized %.6f\n", i, __bfloat162float(h_C[i]), __bfloat162float(h_C_optimized[i]));
+                return 1;
+            }
+        }
+
+        /* ================  Calculate performance  ================ */
+        printf("Speedup ratio: %.2f\n", origin_time / optimized_time);
+
+        /* ================  Cleanup  ================ */
+        cudaFree(d_A);
+        cudaFree(d_B);
+        cudaFree(d_C);
+        cudaFree(d_C_optimized);
+
+        free(h_A);
+        free(h_B);
+        free(h_C);
+        free(h_C_optimized);
+        delete [] test_case.A;
+        delete [] test_case.B;
+    }
+
+    return 0;
+}

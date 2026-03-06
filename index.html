@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NPU Operator Optimization Comparison</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f6f8fa;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            color: #1e293b;
+        }
+
+        header {
+            padding: 1rem 2rem;
+            background: #ffffff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            border-bottom: 1px solid #e9edf2;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        header h1 {
+            font-weight: 600;
+            font-size: 1.5rem;
+            letter-spacing: -0.01em;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        header h1 span {
+            background: #dbeafe;
+            color: #1e4f8a;
+            font-size: 0.85rem;
+            font-weight: 500;
+            padding: 0.2rem 0.7rem;
+            border-radius: 20px;
+        }
+
+        .toolbar {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .precision-controls {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .precision-btn {
+            background: #f1f5f9;
+            border: 1px solid #cbd5e1;
+            padding: 0.3rem 0.8rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.1s ease;
+            color: #1e293b;
+        }
+
+        .precision-btn:hover {
+            background: #e1e8f0;
+            border-color: #94a3b8;
+        }
+
+        .precision-btn.active {
+            background: #1e4f8a;
+            color: white;
+            border-color: #0f2f51;
+        }
+
+        .btn {
+            background: #f1f5f9;
+            border: 1px solid #cbd5e1;
+            padding: 0.5rem 1.2rem;
+            border-radius: 30px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.1s ease;
+            color: #1e293b;
+        }
+
+        .btn:hover {
+            background: #e1e8f0;
+            border-color: #94a3b8;
+        }
+
+        .btn.primary {
+            background: #1e4f8a;
+            border-color: #0f2f51;
+            color: white;
+        }
+
+        .btn.primary:hover {
+            background: #163a61;
+        }
+
+        .status {
+            font-size: 0.85rem;
+            color: #475569;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .sidebar {
+            width: 250px;
+            background: #ffffff;
+            border-right: 1px solid #e2e8f0;
+            padding: 1.5rem 0.5rem;
+            overflow-y: auto;
+            box-shadow: 2px 0 8px rgba(0,0,0,0.02);
+            position: relative;
+            flex-shrink: 0;
+        }
+
+        .resizer {
+            width: 4px;
+            background: #e2e8f0;
+            cursor: col-resize;
+            position: relative;
+            flex-shrink: 0;
+            transition: background-color 0.1s ease;
+        }
+
+        .resizer:hover {
+            background: #cbd5e1;
+        }
+
+        .resizer.dragging {
+            background: #2563eb;
+        }
+
+        .sidebar h3 {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #64748b;
+            margin: 0 1rem 1rem 1rem;
+            font-weight: 600;
+        }
+
+        .operator-list {
+            list-style: none;
+        }
+
+        .operator-item {
+            padding: 0.7rem 1.2rem;
+            margin: 0.2rem 0.5rem;
+            border-radius: 10px;
+            font-weight: 500;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            color: #334155;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .operator-item:hover {
+            background: #f1f5f9;
+            color: #0f172a;
+        }
+
+        .operator-item.active {
+            background: #e9eff9;
+            color: #0a3a6b;
+            font-weight: 600;
+            box-shadow: inset 3px 0 0 #2563eb;
+        }
+
+        .operator-item .badge {
+            font-size: 0.7rem;
+            background: #cbd5e1;
+            color: #1e293b;
+            border-radius: 16px;
+            padding: 0.15rem 0.5rem;
+            margin-left: auto;
+            font-weight: 400;
+        }
+
+        .operator-item.active .badge {
+            background: #bbd4fd;
+            color: #1e3a8a;
+        }
+
+        .operator-item .file-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #cbd5e1;
+            margin-right: 4px;
+        }
+
+        .operator-item.file-available .file-indicator {
+            background: #22c55e;
+        }
+
+        .code-view {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background: #f8fafc;
+        }
+
+        .code-panels {
+            display: flex;
+            flex: 1;
+            gap: 1px;
+            background: #e2e8f0;
+            box-shadow: inset 0 1px 0 #e2e8f0;
+            min-height: 0;
+        }
+
+        .panel {
+            flex: 1;
+            background: #ffffff;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            min-height: 0;
+            min-width: 300px;
+        }
+
+        .panel-header {
+            padding: 0.9rem 1.5rem;
+            background: #f9fbfd;
+            border-bottom: 1px solid #e9edf2;
+            font-weight: 600;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #1e293b;
+        }
+
+        .panel-header .badge-opt {
+            background: #dcfce7;
+            color: #166534;
+            padding: 0.2rem 0.6rem;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            margin-left: auto;
+        }
+
+        .panel-header .badge-original {
+            background: #f1f5f9;
+            color: #475569;
+            padding: 0.2rem 0.6rem;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            margin-left: auto;
+        }
+
+        .code-container {
+            flex: 1;
+            padding: 1.2rem;
+            overflow: auto;
+            background: #0f172a;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Roboto Mono', monospace;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            white-space: pre;
+            tab-size: 4;
+            color: #e2e8f0;
+            scrollbar-width: thin;
+            scrollbar-color: #475569 #1e293b;
+            max-height: 100%;
+            min-height: 0;
+        }
+
+        .code-container::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        .code-container::-webkit-scrollbar-track {
+            background: #1e293b;
+        }
+
+        .code-container::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 4px;
+        }
+
+        .placeholder-note {
+            color: #94a3b8;
+            font-style: italic;
+        }
+
+        .footer-note {
+            padding: 0.8rem 1.8rem;
+            background: #ffffff;
+            border-top: 1px solid #e2e8f0;
+            font-size: 0.8rem;
+            color: #64748b;
+            display: flex;
+            gap: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>
+            MSKernelBench & CUDAMaster
+        </h1>
+        <div class="toolbar">
+            <span class="status" id="statusText">Loading operators from local directories...</span>
+            <div class="precision-controls">
+                <span style="font-size: 0.8rem; color: #64748b;">Precision:</span>
+                <button class="precision-btn active" data-precision="fp32">FP32</button>
+                <button class="precision-btn" data-precision="bf16">BF16</button>
+            </div>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <!-- Left sidebar with dynamically generated operators -->
+        <div class="sidebar">
+            <h3>Select Operator</h3>
+            <ul class="operator-list" id="operatorList">
+                <!-- Operators will be dynamically generated here -->
+            </ul>
+            <div style="margin-top: 2rem; padding: 0 1rem; color: #94a3b8; font-size: 0.75rem; border-top: 1px dashed #d1d9e6; padding-top: 1.5rem;">
+                Automatically loading .cu files from origin/ and optimized/ directories
+            </div>
+        </div>
+        
+        <!-- Draggable resizer -->
+        <div class="resizer" id="resizer"></div>
+
+        <!-- Code comparison area -->
+        <div class="code-view">
+            <div class="code-panels">
+                <div class="panel" id="originPanel">
+                    <div class="panel-header">
+                        <span>Before Optimization (origin)</span>
+                    </div>
+                    <div class="code-container" id="beforeCode">
+                        <code class="placeholder-note">// Please select root directory first, then click an operator from the left</code>
+                    </div>
+                </div>
+                
+                <!-- Second draggable resizer -->
+                <div class="resizer" id="codeResizer"></div>
+                
+                <div class="panel" id="optimizedPanel">
+                    <div class="panel-header">
+                        <span>After Optimization (optimized)</span>
+                    </div>
+                    <div class="code-container" id="afterCode">
+                        <code class="placeholder-note">// Please select root directory first, then click an operator from the left</code>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-note">
+                <span>Click operator on left to load corresponding .cu files</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            // DOM elements
+            const statusText = document.getElementById('statusText');
+            const beforeCode = document.getElementById('beforeCode');
+            const afterCode = document.getElementById('afterCode');
+            const operatorList = document.getElementById('operatorList');
+
+            // Store file mapping: { opName: { origin: string, optimized: string } }
+            let fileMap = new Map();
+            let currentOp = null;
+            let currentPrecision = 'fp32'; // Default precision
+
+            // List of all operators from origin directory
+            const allOperators = [
+                'batch_norm', 'conv_1d', 'conv_2d', 'cross_entropy_loss', 'dot_product', 'elu',
+                'FFT', 'gelu', 'high_order_contraction', 'hinge_loss', 'layer_norm', 'leaky_RELU',
+                'matrix_copy', 'matrix_mul', 'matrix_power', 'matrix_scalar_mul', 'matrix_transpose',
+                'matrix_vector_mul', 'max_pooling_2d', 'merge_attn_states', 'monte_carlo_int',
+                'MSE_loss', 'prefix_sum', 'RELU', 'reverse_array', 'rms_norm', 'rope', 'row_tanh',
+                'selu', 'sigmoid', 'silu_and_mul', 'simpson_int', 'softmax', 'softmax_attention',
+                'sorting', 'spmm_coo', 'spmm_csc', 'spmm_csr', 'spmm_ell', 'spmv_coo', 'spmv_csc',
+                'spmv_csr', 'spmv_ell', 'square_matrix_mul', 'stencil_2d', 'stencil_3d', 'SwiGLU',
+                'top_k', 'triangle_attention', 'vector_add'
+            ];
+
+            // Load file content using fetch
+            async function loadFile(filePath) {
+                try {
+                    const response = await fetch(filePath);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return await response.text();
+                } catch (error) {
+                    console.warn(`Failed to load ${filePath}:`, error);
+                    return null;
+                }
+            }
+
+            // Load all files from origin and optimized directories
+            async function loadAllFiles() {
+                statusText.textContent = 'Loading files...';
+                fileMap.clear();
+                
+                for (const op of allOperators) {
+                    let originPath, optimizedPath;
+                    
+                    if (currentPrecision === 'bf16') {
+                        // BF16 files have _bf16 suffix
+                        originPath = `origin/${currentPrecision}/${op}_bf16.cu`;
+                        optimizedPath = `optimized/${currentPrecision}/${op}_bf16.cu`;
+                    } else {
+                        // FP32 files have no suffix
+                        originPath = `origin/${currentPrecision}/${op}.cu`;
+                        optimizedPath = `optimized/${currentPrecision}/${op}.cu`;
+                    }
+                    
+                    const [originContent, optimizedContent] = await Promise.all([
+                        loadFile(originPath),
+                        loadFile(optimizedPath)
+                    ]);
+                    
+                    if (originContent || optimizedContent) {
+                        fileMap.set(op, {
+                            origin: originContent,
+                            optimized: optimizedContent
+                        });
+                    }
+                }
+                
+                statusText.textContent = `Loaded ${fileMap.size} operators (${currentPrecision.toUpperCase()})`;
+                updateFileIndicators();
+                
+                // Select first available operator only if no current operator is set
+                if (fileMap.size > 0 && !currentOp) {
+                    const firstOp = Array.from(fileMap.keys())[0];
+                    currentOp = firstOp;
+                    setActiveItem(firstOp);
+                    await updateCode(firstOp);
+                }
+            }
+
+            // Generate operator list dynamically
+            function generateOperatorList() {
+                operatorList.innerHTML = '';
+                allOperators.forEach(op => {
+                    const li = document.createElement('li');
+                    li.className = 'operator-item';
+                    li.setAttribute('data-op', op);
+                    li.innerHTML = `
+                        <span>${op}</span>
+                    `;
+                    li.addEventListener('click', async () => {
+                        currentOp = op;
+                        setActiveItem(op);
+                        await updateCode(op);
+                    });
+                    operatorList.appendChild(li);
+                });
+            }
+
+            // Update active item in sidebar
+            function setActiveItem(opKey) {
+                const operatorItems = document.querySelectorAll('.operator-item');
+                operatorItems.forEach(item => {
+                    const dataOp = item.getAttribute('data-op');
+                    if (dataOp === opKey) {
+                        item.classList.add('active');
+                    } else {
+                        item.classList.remove('active');
+                    }
+                });
+            }
+
+            // Update file indicators (green dots)
+            function updateFileIndicators() {
+                const operatorItems = document.querySelectorAll('.operator-item');
+                operatorItems.forEach(item => {
+                    const op = item.getAttribute('data-op');
+                    const hasOrigin = fileMap.has(op) && fileMap.get(op).origin != null;
+                    const hasOpt = fileMap.has(op) && fileMap.get(op).optimized != null;
+                    // Only show green dot if files are actually available
+                    if (hasOrigin || hasOpt) {
+                        item.classList.add('file-available');
+                    } else {
+                        item.classList.remove('file-available');
+                    }
+                });
+            }
+
+            // Display code: load files based on current operator
+            async function updateCode(opKey) {
+                const entry = fileMap.get(opKey);
+                if (!entry) {
+                    beforeCode.textContent = '// No files found for this operator';
+                    afterCode.textContent = '// No files found for this operator';
+                    return;
+                }
+
+                // Show loading
+                beforeCode.textContent = '// Loading...';
+                afterCode.textContent = '// Loading...';
+
+                // Display content
+                if (entry.origin) {
+                    beforeCode.textContent = entry.origin;
+                } else {
+                    beforeCode.textContent = '// origin file does not exist';
+                }
+
+                if (entry.optimized) {
+                    afterCode.textContent = entry.optimized;
+                } else {
+                    afterCode.textContent = '// optimized file does not exist';
+                }
+            }
+
+            // Initialize
+            generateOperatorList();
+            loadAllFiles();
+
+            // Precision selection functionality
+            const precisionButtons = document.querySelectorAll('.precision-btn');
+            
+            precisionButtons.forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const precision = btn.getAttribute('data-precision');
+                    
+                    // Update active state
+                    precisionButtons.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    
+                    // Store current operator before switching
+                    const previousOp = currentOp;
+                    
+                    // Update current precision and reload files
+                    currentPrecision = precision;
+                    await loadAllFiles();
+                    
+                    // Restore previous operator if it exists in new precision
+                    if (previousOp && fileMap.has(previousOp)) {
+                        currentOp = previousOp;
+                        setActiveItem(previousOp);
+                        await updateCode(previousOp);
+                    }
+                });
+            });
+
+            // Resizable sidebar functionality
+            const resizer = document.getElementById('resizer');
+            const codeResizer = document.getElementById('codeResizer');
+            const sidebar = document.querySelector('.sidebar');
+            const codeView = document.querySelector('.code-view');
+            const originPanel = document.getElementById('originPanel');
+            const optimizedPanel = document.getElementById('optimizedPanel');
+            
+            // First resizer (between sidebar and code view) - DISABLED
+            let isResizing1 = false;
+            let startX1 = 0;
+            let startWidth1 = 0;
+            let containerWidth = 0;
+            
+            // Disable first resizer - sidebar width is now fixed
+            resizer.style.display = 'none';
+            
+            // Second resizer (between code panels)
+            let isResizing2 = false;
+            let startX2 = 0;
+            let startWidth1_2 = 0;
+            let startWidth2_2 = 0;
+            let codePanelsWidth = 0;
+            
+            codeResizer.addEventListener('mousedown', (e) => {
+                isResizing2 = true;
+                startX2 = e.clientX;
+                startWidth1_2 = originPanel.offsetWidth;
+                startWidth2_2 = optimizedPanel.offsetWidth;
+                codePanelsWidth = startWidth1_2 + startWidth2_2;
+                codeResizer.classList.add('dragging');
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+                e.preventDefault();
+            });
+            
+            document.addEventListener('mousemove', (e) => {
+                // Handle second resizer - maintain total width
+                if (isResizing2) {
+                    const deltaX = e.clientX - startX2;
+                    const newWidth1 = startWidth1_2 + deltaX;
+                    const newWidth2 = codePanelsWidth - newWidth1;
+                    
+                    const minWidth = 300;
+                    
+                    // Ensure both panels stay within bounds and total width is maintained
+                    if (newWidth1 >= minWidth && newWidth2 >= minWidth) {
+                        originPanel.style.flex = '0 0 ' + newWidth1 + 'px';
+                        optimizedPanel.style.flex = '0 0 ' + newWidth2 + 'px';
+                    }
+                }
+            });
+            
+            document.addEventListener('mouseup', () => {
+                // Handle second resizer
+                if (isResizing2) {
+                    isResizing2 = false;
+                    codeResizer.classList.remove('dragging');
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                }
+            });
+        })();
+    </script>
+</body>
+</html>
