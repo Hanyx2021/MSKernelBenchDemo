@@ -399,8 +399,20 @@
             let currentPrecision = 'fp32'; // Default precision
             let isLoading = false; // Loading state tracker
 
-            // List of all operators from origin directory
-            const allOperators = [
+            // Static operator lists - no file checking needed for initial load
+            const fp32Operators = [
+                'batch_norm', 'conv_1d', 'conv_2d', 'cross_entropy_loss', 'dot_product', 'elu',
+                'FFT', 'gelu', 'high_order_contraction', 'hinge_loss', 'layer_norm', 'leaky_RELU',
+                'matrix_copy', 'matrix_mul', 'matrix_power', 'matrix_scalar_mul', 'matrix_transpose',
+                'matrix_vector_mul', 'max_pooling_2d', 'merge_attn_states', 'monte_carlo_int',
+                'MSE_loss', 'prefix_sum', 'RELU', 'reverse_array', 'rms_norm', 'rope', 'row_tanh',
+                'selu', 'sigmoid', 'silu_and_mul', 'simpson_int', 'softmax', 'softmax_attention',
+                'sorting', 'spmm_coo', 'spmm_csc', 'spmm_csr', 'spmm_ell', 'spmv_coo', 'spmv_csc',
+                'spmv_csr', 'spmv_ell', 'square_matrix_mul', 'stencil_2d', 'stencil_3d', 'SwiGLU',
+                'top_k', 'triangle_attention', 'vector_add'
+            ];
+
+            const bf16Operators = [
                 'batch_norm', 'conv_1d', 'conv_2d', 'cross_entropy_loss', 'dot_product', 'elu',
                 'FFT', 'gelu', 'high_order_contraction', 'hinge_loss', 'layer_norm', 'leaky_RELU',
                 'matrix_copy', 'matrix_mul', 'matrix_power', 'matrix_scalar_mul', 'matrix_transpose',
@@ -426,52 +438,41 @@
                 }
             }
 
-            // Lazy loading: only check which operators are available, don't load content yet
+            // Ultra-fast loading: no network requests needed for initial load
             async function loadAllFiles() {
                 if (isLoading) return; // Prevent multiple simultaneous loads
                 isLoading = true;
                 
+                console.log('loadAllFiles called, currentPrecision:', currentPrecision);
+                
+                // Get current operator list
+                const currentOperators = currentPrecision === 'fp32' ? fp32Operators : bf16Operators;
+                console.log('Using operators:', currentOperators.length, 'for precision:', currentPrecision);
+                
+                // Initialize file map with null values (will be loaded on demand)
                 fileMap.clear();
+                currentOperators.forEach(op => {
+                    fileMap.set(op, {
+                        origin: null,
+                        optimized: null,
+                        originPath: currentPrecision === 'fp32' ? `origin/fp32/${op}.cu` : `origin/bf16/${op}_bf16.cu`,
+                        optimizedPath: currentPrecision === 'fp32' ? `optimized/fp32/${op}.cu` : `optimized/bf16/${op}_bf16.cu`
+                    });
+                });
                 
-                let availableCount = 0;
+                // Generate operator list UI
+                generateOperatorList();
                 
-                for (const op of allOperators) {
-                    let originPath, optimizedPath;
-                    
-                    if (currentPrecision === 'bf16') {
-                        originPath = `origin/${currentPrecision}/${op}_bf16.cu`;
-                        optimizedPath = `optimized/${currentPrecision}/${op}_bf16.cu`;
-                    } else {
-                        originPath = `origin/${currentPrecision}/${op}.cu`;
-                        optimizedPath = `optimized/${currentPrecision}/${op}.cu`;
-                    }
-                    
-                    // Only check if files exist, don't load content yet
-                    const [originExists, optimizedExists] = await Promise.all([
-                        checkFileExists(originPath),
-                        checkFileExists(optimizedPath)
-                    ]);
-                    
-                    if (originExists || optimizedExists) {
-                        fileMap.set(op, {
-                            origin: null, // Will be loaded on demand
-                            optimized: null, // Will be loaded on demand
-                            originPath: originPath,
-                            optimizedPath: optimizedPath
-                        });
-                        availableCount++;
-                    }
-                }
-                
+                if (statusText) statusText.textContent = `${currentOperators.length} operators (${currentPrecision.toUpperCase()}) - Ready`;
                 updateFileIndicators();
                 
-                // Auto-select first available operator (only on initial page load)
-                if (availableCount > 0 && !currentOp) {
-                    const firstOp = Array.from(fileMap.keys())[0];
+                // Auto-select and load first operator
+                if (currentOperators.length > 0 && !currentOp) {
+                    const firstOp = currentOperators[0]; // batch_norm
+                    console.log('Auto-selecting first operator:', firstOp);
                     currentOp = firstOp;
                     setActiveItem(firstOp);
-                    // Auto-load first operator content only on initial load
-                    updateCode(firstOp);
+                    await updateCode(firstOp);
                 }
                 
                 isLoading = false;
@@ -487,14 +488,19 @@
                 }
             }
 
-            // Generate operator list dynamically
+            // Generate operator list dynamically based on current precision
             function generateOperatorList() {
+                console.log('generateOperatorList called, currentPrecision:', currentPrecision);
                 operatorList.innerHTML = '';
-                allOperators.forEach(op => {
+                const currentOperators = currentPrecision === 'fp32' ? fp32Operators : bf16Operators;
+                console.log('currentOperators:', currentOperators.length);
+                
+                currentOperators.forEach(op => {
                     const li = document.createElement('li');
                     li.className = 'operator-item';
                     li.setAttribute('data-op', op);
                     li.innerHTML = `
+                        <span class="file-indicator"></span>
                         <span>${op}</span>
                     `;
                     li.addEventListener('click', async () => {
@@ -524,8 +530,9 @@
                 const operatorItems = document.querySelectorAll('.operator-item');
                 operatorItems.forEach(item => {
                     const op = item.getAttribute('data-op');
-                    const hasOrigin = fileMap.has(op) && fileMap.get(op).origin != null;
-                    const hasOpt = fileMap.has(op) && fileMap.get(op).optimized != null;
+                    const entry = fileMap.get(op);
+                    const hasOrigin = entry && entry.origin != null;
+                    const hasOpt = entry && entry.optimized != null;
                     // Only show green dot if files are actually available
                     if (hasOrigin || hasOpt) {
                         item.classList.add('file-available');
@@ -539,14 +546,14 @@
             async function updateCode(opKey) {
                 const entry = fileMap.get(opKey);
                 if (!entry) {
-                    beforeCode.textContent = '// No files found for this operator';
-                    afterCode.textContent = '// No files found for this operator';
+                    if (beforeCode) beforeCode.textContent = '// No files found for this operator';
+                    if (afterCode) afterCode.textContent = '// No files found for this operator';
                     return;
                 }
 
                 // Show loading with spinner
-                beforeCode.innerHTML = '<div style="text-align: center; padding: 2rem; color: #64748b;">Loading...</div>';
-                afterCode.innerHTML = '<div style="text-align: center; padding: 2rem; color: #64748b;">Loading...</div>';
+                if (beforeCode) beforeCode.innerHTML = '<div style="text-align: center; padding: 2rem; color: #64748b;">Loading...</div>';
+                if (afterCode) afterCode.innerHTML = '<div style="text-align: center; padding: 2rem; color: #64748b;">Loading...</div>';
 
                 // Load content on demand
                 let originContent = entry.origin;
@@ -563,22 +570,23 @@
                 }
 
                 // Display content
-                if (originContent) {
+                if (beforeCode && originContent) {
                     beforeCode.textContent = originContent;
-                } else {
+                } else if (beforeCode) {
                     beforeCode.textContent = '// origin file does not exist';
                 }
 
-                if (optimizedContent) {
+                if (afterCode && optimizedContent) {
                     afterCode.textContent = optimizedContent;
-                } else {
+                } else if (afterCode) {
                     afterCode.textContent = '// optimized file does not exist';
                 }
             }
 
-            // Initialize
-            generateOperatorList();
-            loadAllFiles();
+            // Initialize when DOM is ready
+            document.addEventListener('DOMContentLoaded', () => {
+                loadAllFiles();
+            });
 
             // Precision selection functionality
             const precisionButtons = document.querySelectorAll('.precision-btn');
@@ -594,20 +602,35 @@
                     // Store current operator before switching
                     const previousOp = currentOp;
                     
-                    // Update current precision and reload file availability
+                    // Update current precision and reload instantly
                     currentPrecision = precision;
-                    fileMap.clear(); // Clear cache to force reload
-                    await loadAllFiles();
+                    
+                    // Get new operator list and rebuild file map
+                    const newOperators = precision === 'fp32' ? fp32Operators : bf16Operators;
+                    fileMap.clear();
+                    newOperators.forEach(op => {
+                        fileMap.set(op, {
+                            origin: null,
+                            optimized: null,
+                            originPath: precision === 'fp32' ? `origin/fp32/${op}.cu` : `origin/bf16/${op}_bf16.cu`,
+                            optimizedPath: precision === 'fp32' ? `optimized/fp32/${op}.cu` : `optimized/bf16/${op}_bf16.cu`
+                        });
+                    });
+                    
+                    // Generate operator list UI
+                    generateOperatorList();
+                    
+                    if (statusText) statusText.textContent = `${newOperators.length} operators (${precision.toUpperCase()}) - Ready`;
+                    if (typeof updateFileIndicators === 'function') updateFileIndicators();
                     
                     // Restore previous operator if it exists in new precision
                     if (previousOp && fileMap.has(previousOp)) {
                         currentOp = previousOp;
                         setActiveItem(previousOp);
-                        // Immediately load the operator content
                         await updateCode(previousOp);
-                    } else if (fileMap.size > 0) {
+                    } else if (newOperators.length > 0) {
                         // If previous op doesn't exist, select first available
-                        const firstOp = Array.from(fileMap.keys())[0];
+                        const firstOp = newOperators[0];
                         currentOp = firstOp;
                         setActiveItem(firstOp);
                         await updateCode(firstOp);
