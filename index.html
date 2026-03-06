@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NPU Operator Optimization Comparison</title>
+    <title>MSKernelBench Demo</title>
     <style>
         * {
             margin: 0;
@@ -332,7 +332,6 @@
             MSKernelBench & CUDAMaster
         </h1>
         <div class="toolbar">
-            <span class="status" id="statusText">Loading operators from local directories...</span>
             <div class="precision-controls">
                 <span style="font-size: 0.8rem; color: #64748b;">Precision:</span>
                 <button class="precision-btn active" data-precision="fp32">FP32</button>
@@ -364,7 +363,7 @@
                         <span>Before Optimization (origin)</span>
                     </div>
                     <div class="code-container" id="beforeCode">
-                        <code class="placeholder-note">// Please select root directory first, then click an operator from the left</code>
+                        // Please select root directory first, then click an operator from the left
                     </div>
                 </div>
                 
@@ -376,7 +375,7 @@
                         <span>After Optimization (optimized)</span>
                     </div>
                     <div class="code-container" id="afterCode">
-                        <code class="placeholder-note">// Please select root directory first, then click an operator from the left</code>
+                        // Please select root directory first, then click an operator from the left
                     </div>
                 </div>
             </div>
@@ -398,6 +397,7 @@
             let fileMap = new Map();
             let currentOp = null;
             let currentPrecision = 'fp32'; // Default precision
+            let isLoading = false; // Loading state tracker
 
             // List of all operators from origin directory
             const allOperators = [
@@ -426,46 +426,64 @@
                 }
             }
 
-            // Load all files from origin and optimized directories
+            // Lazy loading: only check which operators are available, don't load content yet
             async function loadAllFiles() {
-                statusText.textContent = 'Loading files...';
+                if (isLoading) return; // Prevent multiple simultaneous loads
+                isLoading = true;
+                
                 fileMap.clear();
+                
+                let availableCount = 0;
                 
                 for (const op of allOperators) {
                     let originPath, optimizedPath;
                     
                     if (currentPrecision === 'bf16') {
-                        // BF16 files have _bf16 suffix
                         originPath = `origin/${currentPrecision}/${op}_bf16.cu`;
                         optimizedPath = `optimized/${currentPrecision}/${op}_bf16.cu`;
                     } else {
-                        // FP32 files have no suffix
                         originPath = `origin/${currentPrecision}/${op}.cu`;
                         optimizedPath = `optimized/${currentPrecision}/${op}.cu`;
                     }
                     
-                    const [originContent, optimizedContent] = await Promise.all([
-                        loadFile(originPath),
-                        loadFile(optimizedPath)
+                    // Only check if files exist, don't load content yet
+                    const [originExists, optimizedExists] = await Promise.all([
+                        checkFileExists(originPath),
+                        checkFileExists(optimizedPath)
                     ]);
                     
-                    if (originContent || optimizedContent) {
+                    if (originExists || optimizedExists) {
                         fileMap.set(op, {
-                            origin: originContent,
-                            optimized: optimizedContent
+                            origin: null, // Will be loaded on demand
+                            optimized: null, // Will be loaded on demand
+                            originPath: originPath,
+                            optimizedPath: optimizedPath
                         });
+                        availableCount++;
                     }
                 }
                 
-                statusText.textContent = `Loaded ${fileMap.size} operators (${currentPrecision.toUpperCase()})`;
                 updateFileIndicators();
                 
-                // Select first available operator only if no current operator is set
-                if (fileMap.size > 0 && !currentOp) {
+                // Auto-select first available operator (only on initial page load)
+                if (availableCount > 0 && !currentOp) {
                     const firstOp = Array.from(fileMap.keys())[0];
                     currentOp = firstOp;
                     setActiveItem(firstOp);
-                    await updateCode(firstOp);
+                    // Auto-load first operator content only on initial load
+                    updateCode(firstOp);
+                }
+                
+                isLoading = false;
+            }
+
+            // Check if file exists (faster than loading content)
+            async function checkFileExists(filePath) {
+                try {
+                    const response = await fetch(filePath, { method: 'HEAD' });
+                    return response.ok;
+                } catch (error) {
+                    return false;
                 }
             }
 
@@ -517,7 +535,7 @@
                 });
             }
 
-            // Display code: load files based on current operator
+            // Display code: load files on demand when operator is clicked
             async function updateCode(opKey) {
                 const entry = fileMap.get(opKey);
                 if (!entry) {
@@ -526,19 +544,33 @@
                     return;
                 }
 
-                // Show loading
-                beforeCode.textContent = '// Loading...';
-                afterCode.textContent = '// Loading...';
+                // Show loading with spinner
+                beforeCode.innerHTML = '<div style="text-align: center; padding: 2rem; color: #64748b;">Loading...</div>';
+                afterCode.innerHTML = '<div style="text-align: center; padding: 2rem; color: #64748b;">Loading...</div>';
+
+                // Load content on demand
+                let originContent = entry.origin;
+                let optimizedContent = entry.optimized;
+                
+                if (!originContent && entry.originPath) {
+                    originContent = await loadFile(entry.originPath);
+                    entry.origin = originContent; // Cache for future use
+                }
+                
+                if (!optimizedContent && entry.optimizedPath) {
+                    optimizedContent = await loadFile(entry.optimizedPath);
+                    entry.optimized = optimizedContent; // Cache for future use
+                }
 
                 // Display content
-                if (entry.origin) {
-                    beforeCode.textContent = entry.origin;
+                if (originContent) {
+                    beforeCode.textContent = originContent;
                 } else {
                     beforeCode.textContent = '// origin file does not exist';
                 }
 
-                if (entry.optimized) {
-                    afterCode.textContent = entry.optimized;
+                if (optimizedContent) {
+                    afterCode.textContent = optimizedContent;
                 } else {
                     afterCode.textContent = '// optimized file does not exist';
                 }
@@ -562,15 +594,23 @@
                     // Store current operator before switching
                     const previousOp = currentOp;
                     
-                    // Update current precision and reload files
+                    // Update current precision and reload file availability
                     currentPrecision = precision;
+                    fileMap.clear(); // Clear cache to force reload
                     await loadAllFiles();
                     
                     // Restore previous operator if it exists in new precision
                     if (previousOp && fileMap.has(previousOp)) {
                         currentOp = previousOp;
                         setActiveItem(previousOp);
+                        // Immediately load the operator content
                         await updateCode(previousOp);
+                    } else if (fileMap.size > 0) {
+                        // If previous op doesn't exist, select first available
+                        const firstOp = Array.from(fileMap.keys())[0];
+                        currentOp = firstOp;
+                        setActiveItem(firstOp);
+                        await updateCode(firstOp);
                     }
                 });
             });
